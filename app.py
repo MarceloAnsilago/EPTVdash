@@ -31,13 +31,16 @@ st.markdown("""
 <style>
     .block-container { max-width: 1500px; padding-top: 2rem; }
     [data-testid="stSidebar"] { border-right: 1px solid rgba(128,128,128,.18); }
-    [data-testid="stSidebar"] [role="radiogroup"] { gap: .35rem; }
-    [data-testid="stSidebar"] [role="radiogroup"] label {
-        padding: .65rem .8rem; border-radius: .6rem;
-        background: rgba(128,128,128,.08);
+    [data-testid="stSidebar"] .stButton button {
+        justify-content: flex-start; border-radius: .65rem;
+        padding: .65rem 1rem; font-weight: 600;
     }
-    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-        background: rgba(0,145,102,.16);
+    [data-testid="stSidebar"] .stButton button[kind="primary"] {
+        background: #087e63; border-color: #087e63; color: white;
+    }
+    [data-testid="stMetric"] {
+        background: rgba(8,126,99,.08); border: 1px solid rgba(8,126,99,.15);
+        border-radius: .8rem; padding: 1rem 1.2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -121,7 +124,13 @@ with st.sidebar:
     st.caption("Permissão de Trânsito de Vegetais")
     st.divider()
     st.caption("NAVEGAÇÃO")
-    pagina = st.radio("Navegação", ["Ler PTV", "PTVs salvas"], format_func=lambda p: {"Ler PTV": "📄  Ler PTV", "PTVs salvas": "🗂️  PTVs salvas"}[p], label_visibility="collapsed")
+    if "pagina" not in st.session_state:
+        st.session_state.pagina = "Ler PTV"
+    for nome, icone in (("Ler PTV", "📄"), ("PTVs salvas", "🗂️")):
+        if st.button(f"{icone}  {nome}", key=f"nav_{nome}", width="stretch", type="primary" if st.session_state.pagina == nome else "secondary"):
+            st.session_state.pagina = nome
+            st.rerun()
+    pagina = st.session_state.pagina
     st.divider()
     st.subheader("Minha conta")
     if client:
