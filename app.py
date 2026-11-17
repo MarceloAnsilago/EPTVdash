@@ -1,6 +1,7 @@
 import os
 
 from datetime import datetime
+from decimal import Decimal
 
 import pandas as pd
 import pymupdf
@@ -53,6 +54,53 @@ def config_value(name):
         return st.secrets.get(name)
     except FileNotFoundError:
         return None
+
+
+def formatar_numero(valor, casas=2):
+    return f"{valor:,.{casas}f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def exibir_dashboard(client):
+    st.title("Dashboard")
+    st.caption("Acompanhe suas PTVs e calcule o valor a receber.")
+    with st.container(border=True):
+        st.subheader("Parâmetros do cálculo")
+        primeira, segunda = st.columns(2)
+        with primeira:
+            valor_unitario = st.number_input("Valor por muda (R$)", min_value=0.0, value=1.50, step=0.10, format="%.2f")
+        with segunda:
+            percentual = st.number_input("Seu percentual (%)", min_value=0.0, value=7.0, step=0.5, format="%.2f")
+        st.caption("Os valores podem ser alterados durante a sessão.")
+
+    if not st.session_state.get("usuario"):
+        st.info("Entre na sua conta para visualizar os dados das PTVs salvas.")
+        return
+    try:
+        registros = []
+        inicio = 0
+        while True:
+            pagina = (client.table("ptvs").select("id,ptv_produtos(quantidade)")
+                      .order("id").range(inicio, inicio + 499).execute().data)
+            registros.extend(pagina)
+            if len(pagina) < 500:
+                break
+            inicio += len(pagina)
+        mudas = sum((Decimal(str(produto["quantidade"])) for ptv in registros
+                     for produto in ptv.get("ptv_produtos") or []
+                     if produto.get("quantidade") is not None), Decimal("0"))
+    except Exception:
+        st.error("Não foi possível carregar os dados do dashboard. Verifique a conexão com o banco.")
+        return
+
+    total = mudas * Decimal(str(valor_unitario))
+    valor_final = total * Decimal(str(percentual)) / Decimal("100")
+    quantidade = formatar_numero(mudas, 0 if mudas == mudas.to_integral_value() else 2)
+    st.subheader("Visão geral")
+    cards = st.columns(4)
+    cards[0].metric("PTVs cadastradas", formatar_numero(len(registros), 0))
+    cards[1].metric("Quantidade de mudas", quantidade)
+    cards[2].metric("Valor total", "R$ " + formatar_numero(total), help="Quantidade de mudas multiplicada pelo valor por muda.")
+    cards[3].metric("Seu valor final", "R$ " + formatar_numero(valor_final), help="Percentual aplicado ao valor total.")
 
 
 def exibir_ptvs_salvas(client):
@@ -125,8 +173,8 @@ with st.sidebar:
     st.divider()
     st.caption("NAVEGAÇÃO")
     if "pagina" not in st.session_state:
-        st.session_state.pagina = "Ler PTV"
-    for nome, icone in (("Ler PTV", "📄"), ("PTVs salvas", "🗂️")):
+        st.session_state.pagina = "Dashboard"
+    for nome, icone in (("Dashboard", "📊"), ("Ler PTV", "📄"), ("PTVs salvas", "🗂️")):
         if st.button(f"{icone}  {nome}", key=f"nav_{nome}", width="stretch", type="primary" if st.session_state.pagina == nome else "secondary"):
             st.session_state.pagina = nome
             st.rerun()
@@ -155,7 +203,9 @@ with st.sidebar:
     else:
         st.info("Configure SUPABASE_URL e SUPABASE_KEY no arquivo .env.")
 
-if pagina == "PTVs salvas":
+if pagina == "Dashboard":
+    exibir_dashboard(client)
+elif pagina == "PTVs salvas":
     if st.session_state.get("ptv_excluida"):
         st.success("PTV excluída: " + st.session_state.pop("ptv_excluida"))
     exibir_ptvs_salvas(client)
