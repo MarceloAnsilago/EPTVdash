@@ -40,6 +40,61 @@ def config_value(name):
         return None
 
 
+def exibir_ptvs_salvas(client):
+    st.header("PTVs salvas")
+    if not st.session_state.get("usuario"):
+        st.info("Entre na sua conta para consultar as PTVs salvas.")
+        return
+    try:
+        registros = (client.table("ptvs")
+                     .select("id,numero_ptv,nome_destinatario,cpf_cnpj_destinatario,endereco_destino,municipio_destino,uf_destino,data_emissao,data_validade,nota_fiscal,ptv_produtos(quantidade,documento_origem,numero_documento)")
+                     .order("id", desc=True).execute().data)
+    except Exception:
+        st.error("Não foi possível consultar as PTVs. Verifique sua conexão e as permissões do banco.")
+        return
+    if not registros:
+        st.info("Nenhuma PTV salva até agora.")
+        return
+
+    linhas = []
+    for ptv in registros:
+        for produto in ptv.get("ptv_produtos") or [{}]:
+            linhas.append({
+                "Nome do destinatário": ptv.get("nome_destinatario"),
+                "CPF/CNPJ do destinatário": ptv.get("cpf_cnpj_destinatario"),
+                "Endereço de destino": ptv.get("endereco_destino"),
+                "Município de destino": ptv.get("municipio_destino"),
+                "UF de destino": ptv.get("uf_destino"),
+                "Quantidade": produto.get("quantidade"),
+                "Documento de origem": produto.get("documento_origem"),
+                "Número do documento": produto.get("numero_documento"),
+                "Nº PTV": ptv.get("numero_ptv"),
+                "Data de emissão": ptv.get("data_emissao"),
+                "Validade": ptv.get("data_validade"),
+                "Nota fiscal": ptv.get("nota_fiscal"),
+            })
+    tabela = pd.DataFrame(linhas)
+    for coluna in ("Data de emissão", "Validade"):
+        tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
+    st.dataframe(tabela, hide_index=True, width="stretch")
+    st.download_button("Baixar PTVs em CSV", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="ptvs_salvas.csv", mime="text/csv")
+
+    st.subheader("Excluir PTV")
+    opcoes = {p["id"]: f"{p['numero_ptv']} — {p.get('nome_destinatario') or 'Destinatário não informado'}" for p in registros}
+    selecionado = st.selectbox("Selecione a PTV", list(opcoes), format_func=opcoes.get)
+    confirmar = st.checkbox("Confirmo a exclusão desta PTV e de seus produtos", key=f"confirmar_{selecionado}")
+    if st.button("Excluir PTV selecionada", disabled=not confirmar):
+        try:
+            resultado = client.table("ptvs").delete().eq("id", selecionado).execute()
+            if not resultado.data:
+                st.error("A PTV não foi excluída. Verifique as permissões do banco.")
+            else:
+                st.session_state.ptv_excluida = opcoes[selecionado]
+                st.rerun()
+        except Exception:
+            st.error("Não foi possível excluir a PTV. Verifique a conexão e as permissões do banco.")
+
+
 url = config_value("SUPABASE_URL")
 key = config_value("SUPABASE_KEY")
 if "supabase_client" not in st.session_state and url and key:
@@ -69,42 +124,49 @@ with st.sidebar:
                     st.error("Não foi possível entrar. Confira o e-mail, a senha e a configuração do Supabase.")
     else:
         st.info("Configure SUPABASE_URL e SUPABASE_KEY no arquivo .env.")
+    pagina = st.radio("Navegação", ["Ler PTV", "PTVs salvas"])
 
-st.header("Leitura de PTV")
-upload = st.file_uploader("Arraste ou selecione o PDF da PTV", type=["pdf"])
-if upload is not None:
-    try:
-        with pymupdf.open(stream=upload.getvalue(), filetype="pdf") as document:
-            if document.needs_pass:
-                st.warning("Este PDF está protegido por senha.")
-            else:
-                text = "\n\n".join(page.get_text() for page in document).strip()
-                if not text:
-                    st.warning("Nenhum texto encontrado. PDFs digitalizados podem precisar de OCR.")
+if pagina == "PTVs salvas":
+    if st.session_state.get("ptv_excluida"):
+        st.success("PTV excluída: " + st.session_state.pop("ptv_excluida"))
+    exibir_ptvs_salvas(client)
+else:
+    st.header("Leitura de PTV")
+    upload = st.file_uploader("Arraste ou selecione o PDF da PTV", type=["pdf"])
+    if upload is not None:
+        try:
+            with pymupdf.open(stream=upload.getvalue(), filetype="pdf") as document:
+                if document.needs_pass:
+                    st.warning("Este PDF está protegido por senha.")
                 else:
-                    rows = extract_ptv(text)
-                    if rows:
-                        st.caption("Confira os dados extraídos no documento original. Campos não identificados ficam vazios.")
-                        colunas = ["Nome do destinatário", "CPF/CNPJ do destinatário", "Endereço de destino", "Município de destino", "UF de destino", "Quantidade", "Documento de origem", "Número do documento", "Nº PTV", "Data de emissão", "Validade", "Nota fiscal"]
-                        tabela = pd.DataFrame(rows).reindex(columns=colunas)
-                        st.dataframe(tabela, hide_index=True, width="stretch")
-                        st.download_button("Baixar tabela em CSV", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="ptv.csv", mime="text/csv")
-                        if st.session_state.get("usuario"):
-                            if st.button("Salvar PTV no banco"):
-                                try:
-                                    dados, produtos = preparar_dados(rows)
-                                    client.rpc("salvar_ptv", {"dados": dados, "produtos": produtos}).execute()
-                                    st.success("PTV salva no banco de dados.")
-                                except Exception:
-                                    st.error("Não foi possível salvar. Verifique se a PTV já foi cadastrada e se o script de acesso foi executado.")
-                        else:
-                            st.info("Entre na sua conta para salvar a PTV no banco.")
+                    text = "\n\n".join(page.get_text() for page in document).strip()
+                    if not text:
+                        st.warning("Nenhum texto encontrado. PDFs digitalizados podem precisar de OCR.")
                     else:
-                        st.warning("Modelo de PTV não reconhecido. Confira o texto extraído abaixo.")
-                    with st.expander("Ver texto extraído do PDF"):
-                        st.text(text)
-    except (pymupdf.FileDataError, pymupdf.EmptyFileError, ValueError):
-        st.error("Não foi possível ler este PDF. Verifique se o arquivo é válido.")
+                        rows = extract_ptv(text)
+                        if rows:
+                            st.caption("Confira os dados extraídos no documento original. Campos não identificados ficam vazios.")
+                            colunas = ["Nome do destinatário", "CPF/CNPJ do destinatário", "Endereço de destino", "Município de destino", "UF de destino", "Quantidade", "Documento de origem", "Número do documento", "Nº PTV", "Data de emissão", "Validade", "Nota fiscal"]
+                            tabela = pd.DataFrame(rows).reindex(columns=colunas)
+                            st.dataframe(tabela, hide_index=True, width="stretch")
+                            st.download_button("Baixar tabela em CSV", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="ptv.csv", mime="text/csv")
+                            if st.session_state.get("usuario"):
+                                if st.button("Salvar PTV no banco"):
+                                    try:
+                                        dados, produtos = preparar_dados(rows)
+                                        client.rpc("salvar_ptv", {"dados": dados, "produtos": produtos}).execute()
+                                        st.success("PTV salva no banco de dados.")
+                                    except Exception:
+                                        st.error("Não foi possível salvar. Verifique se a PTV já foi cadastrada e se o script de acesso foi executado.")
+                            else:
+                                st.info("Entre na sua conta para salvar a PTV no banco.")
+                        else:
+                            st.warning("Modelo de PTV não reconhecido. Confira o texto extraído abaixo.")
+                        with st.expander("Ver texto extraído do PDF"):
+                            st.text(text)
+        except (pymupdf.FileDataError, pymupdf.EmptyFileError, ValueError):
+            st.error("Não foi possível ler este PDF. Verifique se o arquivo é válido.")
+
 
 
 def get_supabase_client():
