@@ -1,4 +1,6 @@
 import os
+from io import BytesIO
+from xml.sax.saxutils import escape
 
 from datetime import datetime
 from decimal import Decimal
@@ -7,6 +9,12 @@ import pandas as pd
 import pymupdf
 import streamlit as st
 from dotenv import load_dotenv
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from supabase import create_client
 
 from ptv_parser import extract_ptv
@@ -60,6 +68,65 @@ def formatar_numero(valor, casas=2):
     return f"{valor:,.{casas}f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+def tabela_ptvs(registros):
+    linhas = []
+    for ptv in registros:
+        for produto in ptv.get("ptv_produtos") or [{}]:
+            linhas.append({
+                "Nome do destinatário": ptv.get("nome_destinatario"),
+                "CPF/CNPJ do destinatário": ptv.get("cpf_cnpj_destinatario"),
+                "Endereço de destino": ptv.get("endereco_destino"),
+                "Município de destino": ptv.get("municipio_destino"),
+                "UF de destino": ptv.get("uf_destino"),
+                "Quantidade": produto.get("quantidade"),
+                "Documento de origem": produto.get("documento_origem"),
+                "Número do documento": produto.get("numero_documento"),
+                "Nº PTV": ptv.get("numero_ptv"),
+                "Data de emissão": ptv.get("data_emissao"),
+                "Validade": ptv.get("data_validade"),
+                "Nota fiscal": ptv.get("nota_fiscal"),
+            })
+    tabela = pd.DataFrame(linhas)
+    if not tabela.empty:
+        for coluna in ("Data de emissão", "Validade"):
+            tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
+    return tabela
+
+
+def gerar_relatorio(tabela, total_ptvs, mudas, valor_unitario, percentual, total, valor_final):
+    arquivo = BytesIO()
+    doc = SimpleDocTemplate(arquivo, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+    estilos = getSampleStyleSheet()
+    texto = ParagraphStyle("celula", parent=estilos["BodyText"], fontSize=9, leading=12, wordWrap="CJK")
+    titulo_celula = ParagraphStyle("rotulo", parent=texto, textColor=colors.HexColor("#31594e"), fontName="Helvetica-Bold")
+    titulo = ParagraphStyle("titulo", parent=estilos["Title"], textColor=colors.HexColor("#087e63"), alignment=TA_CENTER)
+    elementos = [Paragraph("Relatório de PTVs", titulo), Spacer(1, 5*mm)]
+    resumo = [
+        ("PTVs cadastradas", formatar_numero(total_ptvs, 0)),
+        ("Quantidade de mudas", formatar_numero(mudas, 0 if mudas == mudas.to_integral_value() else 2)),
+        ("Valor por muda", "R$ " + formatar_numero(Decimal(str(valor_unitario)))),
+        ("Percentual", formatar_numero(Decimal(str(percentual))) + "%"),
+        ("Valor total", "R$ " + formatar_numero(total)),
+        ("Valor final", "R$ " + formatar_numero(valor_final)),
+    ]
+    resumo_tabela = Table([[Paragraph(escape(k), titulo_celula), Paragraph(escape(v), texto)] for k, v in resumo], colWidths=[65*mm, 115*mm])
+    resumo_tabela.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eff8f4")), ("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#cfe2d9")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    elementos += [resumo_tabela, Spacer(1, 7*mm), Paragraph("Detalhamento das PTVs", estilos["Heading2"])]
+    if tabela.empty:
+        elementos.append(Paragraph("Nenhuma PTV cadastrada.", texto))
+    for numero, (_, row) in enumerate(tabela.fillna("").iterrows(), 1):
+        elementos.append(Paragraph(f"Registro {numero}", estilos["Heading3"]))
+        dados = [[Paragraph(escape(str(campo)), titulo_celula), Paragraph(escape(str(valor)) or "—", texto)] for campo, valor in row.items()]
+        detalhes = Table(dados, colWidths=[65*mm, 115*mm], splitByRow=1, splitInRow=1)
+        detalhes.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#d5e2dc")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.HexColor("#f8fbf9")]), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        elementos.extend([detalhes, Spacer(1, 4*mm)])
+    def rodape(canvas, documento):
+        canvas.setFont("Helvetica", 8)
+        canvas.drawRightString(A4[0] - 15*mm, 9*mm, f"Página {documento.page}")
+    doc.build(elementos, onFirstPage=rodape, onLaterPages=rodape)
+    return arquivo.getvalue()
+
+
 def exibir_dashboard(client):
     st.title("Dashboard")
     st.caption("Acompanhe suas PTVs e calcule o valor a receber.")
@@ -79,7 +146,7 @@ def exibir_dashboard(client):
         registros = []
         inicio = 0
         while True:
-            pagina = (client.table("ptvs").select("id,ptv_produtos(quantidade)")
+            pagina = (client.table("ptvs").select("id,numero_ptv,nome_destinatario,cpf_cnpj_destinatario,endereco_destino,municipio_destino,uf_destino,data_emissao,data_validade,nota_fiscal,ptv_produtos(quantidade,documento_origem,numero_documento)")
                       .order("id").range(inicio, inicio + 499).execute().data)
             registros.extend(pagina)
             if len(pagina) < 500:
@@ -101,6 +168,15 @@ def exibir_dashboard(client):
     cards[1].metric("Quantidade de mudas", quantidade)
     cards[2].metric("Valor total", "R$ " + formatar_numero(total), help="Quantidade de mudas multiplicada pelo valor por muda.")
     cards[3].metric("Seu valor final", "R$ " + formatar_numero(valor_final), help="Percentual aplicado ao valor total.")
+    st.divider()
+    st.subheader("PTVs cadastradas")
+    tabela = tabela_ptvs(registros)
+    if tabela.empty:
+        st.info("Nenhuma PTV salva até agora.")
+    else:
+        st.dataframe(tabela, hide_index=True, width="stretch")
+    pdf = gerar_relatorio(tabela, len(registros), mudas, valor_unitario, percentual, total, valor_final)
+    st.download_button("📄 Baixar relatório em PDF", pdf, file_name="relatorio_ptvs.pdf", mime="application/pdf", type="primary")
 
 
 def exibir_ptvs_salvas(client):
@@ -120,27 +196,8 @@ def exibir_ptvs_salvas(client):
         st.info("Nenhuma PTV salva até agora.")
         return
 
-    linhas = []
-    for ptv in registros:
-        for produto in ptv.get("ptv_produtos") or [{}]:
-            linhas.append({
-                "Nome do destinatário": ptv.get("nome_destinatario"),
-                "CPF/CNPJ do destinatário": ptv.get("cpf_cnpj_destinatario"),
-                "Endereço de destino": ptv.get("endereco_destino"),
-                "Município de destino": ptv.get("municipio_destino"),
-                "UF de destino": ptv.get("uf_destino"),
-                "Quantidade": produto.get("quantidade"),
-                "Documento de origem": produto.get("documento_origem"),
-                "Número do documento": produto.get("numero_documento"),
-                "Nº PTV": ptv.get("numero_ptv"),
-                "Data de emissão": ptv.get("data_emissao"),
-                "Validade": ptv.get("data_validade"),
-                "Nota fiscal": ptv.get("nota_fiscal"),
-            })
     st.metric("PTVs cadastradas", len(registros))
-    tabela = pd.DataFrame(linhas)
-    for coluna in ("Data de emissão", "Validade"):
-        tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
+    tabela = tabela_ptvs(registros)
     st.dataframe(tabela, hide_index=True, width="stretch")
     st.download_button("Baixar PTVs em CSV", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="ptvs_salvas.csv", mime="text/csv")
 
