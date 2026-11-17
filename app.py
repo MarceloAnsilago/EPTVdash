@@ -1,23 +1,25 @@
 import os
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from xml.sax.saxutils import escape
-
-from datetime import datetime
-from decimal import Decimal
 
 import pandas as pd
 import pymupdf
 import streamlit as st
 from dotenv import load_dotenv
+from httpx import HTTPError
+from postgrest.exceptions import APIError
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A3, landscape
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from supabase import create_client
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from supabase_auth.errors import AuthError
 
 from ptv_parser import extract_ptv
+from supabase import create_client
 
 
 def preparar_dados(rows):
@@ -162,13 +164,13 @@ def exibir_dashboard(client, safra):
             inicio += len(pagina)
         mudas = sum((Decimal(str(produto["quantidade"])) for ptv in registros
                      for produto in ptv.get("ptv_produtos") or []
-                     if produto.get("quantidade") is not None), Decimal("0"))
-    except Exception:
+                     if produto.get("quantidade") is not None), Decimal(0))
+    except (APIError, HTTPError, InvalidOperation):
         st.error("Não foi possível carregar os dados do dashboard. Verifique a conexão com o banco.")
         return
 
     total = mudas * Decimal(str(valor_unitario))
-    valor_final = total * Decimal(str(percentual)) / Decimal("100")
+    valor_final = total * Decimal(str(percentual)) / Decimal(100)
     quantidade = formatar_numero(mudas, 0 if mudas == mudas.to_integral_value() else 2)
     st.subheader("Visão geral")
     cards = st.columns(4)
@@ -201,7 +203,7 @@ def exibir_ptvs_salvas(client, safra):
         registros = (client.table("ptvs")
                      .select("id,numero_ptv,nome_destinatario,cpf_cnpj_destinatario,endereco_destino,municipio_destino,uf_destino,data_emissao,data_validade,nota_fiscal,ptv_produtos(quantidade,documento_origem,numero_documento)")
                      .eq("safra_id", safra["id"]).order("id", desc=True).execute().data)
-    except Exception:
+    except (APIError, HTTPError):
         st.error("Não foi possível consultar as PTVs. Verifique sua conexão e as permissões do banco.")
         return
     if not registros:
@@ -226,7 +228,7 @@ def exibir_ptvs_salvas(client, safra):
                 else:
                     st.session_state.ptv_excluida = opcoes[selecionado]
                     st.rerun()
-            except Exception:
+            except (APIError, HTTPError):
                 st.error("Não foi possível excluir a PTV. Verifique a conexão e as permissões do banco.")
 
 
@@ -269,7 +271,7 @@ with st.sidebar:
                     response = client.auth.sign_in_with_password({"email": email, "password": senha})
                     st.session_state.usuario = response.user.email
                     st.rerun()
-                except Exception:
+                except (AuthError, HTTPError):
                     st.error("Não foi possível entrar. Confira o e-mail, a senha e a configuração do Supabase.")
     else:
         st.info("Configure SUPABASE_URL e SUPABASE_KEY no arquivo .env.")
@@ -278,7 +280,7 @@ with st.sidebar:
         st.subheader("Safra")
         try:
             safras = client.table("safras").select("id,nome,padrao").order("nome").execute().data
-        except Exception:
+        except (APIError, HTTPError):
             safras = []
             st.error("Não foi possível carregar as safras. Execute o script 03_safras.sql no Supabase.")
         if safras:
@@ -295,7 +297,7 @@ with st.sidebar:
                 try:
                     client.rpc("definir_safra_padrao", {"safra": selecionada}).execute()
                     st.rerun()
-                except Exception:
+                except (APIError, HTTPError):
                     st.error("Não foi possível alterar a safra padrão.")
         with st.expander("Cadastrar safra"):
             with st.form("nova_safra"):
@@ -309,7 +311,7 @@ with st.sidebar:
                         nova = client.table("safras").insert({"nome": nome_safra.strip(), "padrao": not safras}).execute().data
                         st.session_state.proxima_safra = nova[0]["id"]
                         st.rerun()
-                    except Exception:
+                    except (APIError, HTTPError):
                         st.error("Não foi possível cadastrar. Verifique se essa safra já existe.")
 
 if pagina == "Dashboard":
@@ -347,7 +349,7 @@ else:
                                         dados["safra_id"] = safra_selecionada["id"]
                                         client.rpc("salvar_ptv", {"dados": dados, "produtos": produtos}).execute()
                                         st.success("PTV salva no banco de dados.")
-                                    except Exception:
+                                    except (APIError, HTTPError, ValueError):
                                         st.error("Não foi possível salvar. Verifique se a PTV já foi cadastrada e se o script de acesso foi executado.")
                             else:
                                 st.info("Entre na sua conta e selecione uma safra para salvar a PTV no banco.")
