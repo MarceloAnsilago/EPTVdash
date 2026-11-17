@@ -11,7 +11,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -95,9 +95,10 @@ def tabela_ptvs(registros):
 
 def gerar_relatorio(tabela, total_ptvs, mudas, valor_unitario, percentual, total, valor_final):
     arquivo = BytesIO()
-    doc = SimpleDocTemplate(arquivo, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+    tamanho_pagina = landscape(A3)
+    doc = SimpleDocTemplate(arquivo, pagesize=tamanho_pagina, leftMargin=10*mm, rightMargin=10*mm, topMargin=12*mm, bottomMargin=12*mm)
     estilos = getSampleStyleSheet()
-    texto = ParagraphStyle("celula", parent=estilos["BodyText"], fontSize=9, leading=12, wordWrap="CJK")
+    texto = ParagraphStyle("celula", parent=estilos["BodyText"], fontSize=7.5, leading=9, wordWrap="CJK")
     titulo_celula = ParagraphStyle("rotulo", parent=texto, textColor=colors.HexColor("#31594e"), fontName="Helvetica-Bold")
     titulo = ParagraphStyle("titulo", parent=estilos["Title"], textColor=colors.HexColor("#087e63"), alignment=TA_CENTER)
     elementos = [Paragraph("Relatório de PTVs", titulo), Spacer(1, 5*mm)]
@@ -114,15 +115,18 @@ def gerar_relatorio(tabela, total_ptvs, mudas, valor_unitario, percentual, total
     elementos += [resumo_tabela, Spacer(1, 7*mm), Paragraph("Detalhamento das PTVs", estilos["Heading2"])]
     if tabela.empty:
         elementos.append(Paragraph("Nenhuma PTV cadastrada.", texto))
-    for numero, (_, row) in enumerate(tabela.fillna("").iterrows(), 1):
-        elementos.append(Paragraph(f"Registro {numero}", estilos["Heading3"]))
-        dados = [[Paragraph(escape(str(campo)), titulo_celula), Paragraph(escape(str(valor)) or "—", texto)] for campo, valor in row.items()]
-        detalhes = Table(dados, colWidths=[65*mm, 115*mm], splitByRow=1, splitInRow=1)
-        detalhes.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#d5e2dc")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.HexColor("#f8fbf9")]), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
-        elementos.extend([detalhes, Spacer(1, 4*mm)])
+    else:
+        cabecalhos = ["Destinatário", "CPF/CNPJ", "Endereço", "Município", "Estado", "Qtd.", "Doc. origem", "Nº documento", "Nº PTV", "Emissão", "Validade", "Nota fiscal"]
+        larguras = [42, 27, 56, 35, 25, 19, 26, 29, 28, 23, 23, 25]
+        dados = [[Paragraph(escape(campo), titulo_celula) for campo in cabecalhos]]
+        for _, row in tabela.fillna("").iterrows():
+            dados.append([Paragraph(escape(str(valor)) or "-", texto) for valor in row])
+        detalhes = Table(dados, colWidths=[largura * mm for largura in larguras], repeatRows=1, splitByRow=1, splitInRow=1, hAlign="LEFT")
+        detalhes.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dcefe7")), ("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#d5e2dc")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fbf9")]), ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        elementos.append(detalhes)
     def rodape(canvas, documento):
         canvas.setFont("Helvetica", 8)
-        canvas.drawRightString(A4[0] - 15*mm, 9*mm, f"Página {documento.page}")
+        canvas.drawRightString(tamanho_pagina[0] - 10*mm, 7*mm, f"Página {documento.page}")
     doc.build(elementos, onFirstPage=rodape, onLaterPages=rodape)
     return arquivo.getvalue()
 
