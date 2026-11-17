@@ -27,8 +27,20 @@ def preparar_dados(rows):
 
 load_dotenv()
 st.set_page_config(page_title="EPTV Dash", page_icon="📊", layout="wide")
-st.title("EPTV Dash")
-st.write("Envie uma Permissão de Trânsito de Vegetais (PTV) para consultar seus dados.")
+st.markdown("""
+<style>
+    .block-container { max-width: 1500px; padding-top: 2rem; }
+    [data-testid="stSidebar"] { border-right: 1px solid rgba(128,128,128,.18); }
+    [data-testid="stSidebar"] [role="radiogroup"] { gap: .35rem; }
+    [data-testid="stSidebar"] [role="radiogroup"] label {
+        padding: .65rem .8rem; border-radius: .6rem;
+        background: rgba(128,128,128,.08);
+    }
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+        background: rgba(0,145,102,.16);
+    }
+</style>
+""", unsafe_allow_html=True)
 
 def config_value(name):
     value = os.getenv(name)
@@ -41,7 +53,8 @@ def config_value(name):
 
 
 def exibir_ptvs_salvas(client):
-    st.header("PTVs salvas")
+    st.title("PTVs salvas")
+    st.caption("Consulte os documentos cadastrados e gerencie seus registros.")
     if not st.session_state.get("usuario"):
         st.info("Entre na sua conta para consultar as PTVs salvas.")
         return
@@ -73,26 +86,28 @@ def exibir_ptvs_salvas(client):
                 "Validade": ptv.get("data_validade"),
                 "Nota fiscal": ptv.get("nota_fiscal"),
             })
+    st.metric("PTVs cadastradas", len(registros))
     tabela = pd.DataFrame(linhas)
     for coluna in ("Data de emissão", "Validade"):
         tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
     st.dataframe(tabela, hide_index=True, width="stretch")
     st.download_button("Baixar PTVs em CSV", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="ptvs_salvas.csv", mime="text/csv")
 
-    st.subheader("Excluir PTV")
-    opcoes = {p["id"]: f"{p['numero_ptv']} — {p.get('nome_destinatario') or 'Destinatário não informado'}" for p in registros}
-    selecionado = st.selectbox("Selecione a PTV", list(opcoes), format_func=opcoes.get)
-    confirmar = st.checkbox("Confirmo a exclusão desta PTV e de seus produtos", key=f"confirmar_{selecionado}")
-    if st.button("Excluir PTV selecionada", disabled=not confirmar):
-        try:
-            resultado = client.table("ptvs").delete().eq("id", selecionado).execute()
-            if not resultado.data:
-                st.error("A PTV não foi excluída. Verifique as permissões do banco.")
-            else:
-                st.session_state.ptv_excluida = opcoes[selecionado]
-                st.rerun()
-        except Exception:
-            st.error("Não foi possível excluir a PTV. Verifique a conexão e as permissões do banco.")
+    with st.expander("Excluir uma PTV"):
+        st.caption("A exclusão também remove os produtos vinculados à PTV.")
+        opcoes = {p["id"]: f"{p['numero_ptv']} — {p.get('nome_destinatario') or 'Destinatário não informado'}" for p in registros}
+        selecionado = st.selectbox("Selecione a PTV", list(opcoes), format_func=opcoes.get)
+        confirmar = st.checkbox("Confirmo a exclusão desta PTV e de seus produtos", key=f"confirmar_{selecionado}")
+        if st.button("Excluir PTV selecionada", disabled=not confirmar):
+            try:
+                resultado = client.table("ptvs").delete().eq("id", selecionado).execute()
+                if not resultado.data:
+                    st.error("A PTV não foi excluída. Verifique as permissões do banco.")
+                else:
+                    st.session_state.ptv_excluida = opcoes[selecionado]
+                    st.rerun()
+            except Exception:
+                st.error("Não foi possível excluir a PTV. Verifique a conexão e as permissões do banco.")
 
 
 url = config_value("SUPABASE_URL")
@@ -102,7 +117,13 @@ if "supabase_client" not in st.session_state and url and key:
 client = st.session_state.get("supabase_client")
 
 with st.sidebar:
-    st.header("Supabase")
+    st.title("📊 EPTV Dash")
+    st.caption("Permissão de Trânsito de Vegetais")
+    st.divider()
+    st.caption("NAVEGAÇÃO")
+    pagina = st.radio("Navegação", ["Ler PTV", "PTVs salvas"], format_func=lambda p: {"Ler PTV": "📄  Ler PTV", "PTVs salvas": "🗂️  PTVs salvas"}[p], label_visibility="collapsed")
+    st.divider()
+    st.subheader("Minha conta")
     if client:
         if st.session_state.get("usuario"):
             st.success("Conectado: " + st.session_state.usuario)
@@ -124,14 +145,14 @@ with st.sidebar:
                     st.error("Não foi possível entrar. Confira o e-mail, a senha e a configuração do Supabase.")
     else:
         st.info("Configure SUPABASE_URL e SUPABASE_KEY no arquivo .env.")
-    pagina = st.radio("Navegação", ["Ler PTV", "PTVs salvas"])
 
 if pagina == "PTVs salvas":
     if st.session_state.get("ptv_excluida"):
         st.success("PTV excluída: " + st.session_state.pop("ptv_excluida"))
     exibir_ptvs_salvas(client)
 else:
-    st.header("Leitura de PTV")
+    st.title("Ler uma PTV")
+    st.caption("Envie um PDF para conferir os dados e salvar o documento.")
     upload = st.file_uploader("Arraste ou selecione o PDF da PTV", type=["pdf"])
     if upload is not None:
         try:
