@@ -331,12 +331,22 @@ else:
                 if document.needs_pass:
                     st.warning("Este PDF está protegido por senha.")
                 else:
-                    with st.spinner("Lendo o PDF e reconhecendo texto, se necessário..."):
-                        text = extract_document_text(document)
+                    progress = st.progress(0, text="Iniciando a leitura do PDF...")
+                    try:
+                        text = extract_document_text(
+                            document,
+                            on_progress=lambda value, message: progress.progress(
+                                int(value * 90), text=message),
+                        )
+                        progress.progress(95, text="Organizando os dados da PTV...")
+                        rows = extract_ptv(text) if text else []
+                    except Exception:
+                        progress.empty()
+                        raise
+                    progress.progress(100, text="Leitura do PDF concluída.")
                     if not text:
                         st.warning("Nenhum texto foi reconhecido. Confira se o PDF está legível e tente uma cópia com melhor resolução.")
                     else:
-                        rows = extract_ptv(text)
                         if rows:
                             st.caption("Confira os dados extraídos no documento original. Campos não identificados ficam vazios.")
                             colunas = ["Nome do destinatário", "CPF/CNPJ do destinatário", "Endereço de destino", "Município de destino", "UF de destino", "Quantidade", "Documento de origem", "Número do documento", "Nº PTV", "Data de emissão", "Validade", "Nota fiscal"]
