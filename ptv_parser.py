@@ -18,6 +18,8 @@ def _match(pattern, text):
 
 def extract_ptv(text):
     """Retorna uma linha por produto; campos não reconhecidos ficam vazios."""
+    if re.search(r"Nome do destinat[áa]rio\s*CPF/CNPJ\s*[^\n]+\n[^\n]+\nEndere", text, re.I):
+        return _extract_ocr_ptv(text)
     if not re.search(r"PERMISS[ÃA]O DE TR[ÂA]NSITO DE VEGETAIS", text, re.I):
         return []
 
@@ -74,3 +76,35 @@ def extract_ptv(text):
                      "Medida": value(quantity, 3), "Documento de origem": value(quantity, 4),
                      "Número do documento": value(quantity, 5)})
     return rows
+
+
+def _extract_ocr_ptv(text):
+    """Layout de OCR: rótulos e valores aparecem em linhas alternadas."""
+    if not re.search(r"PERMISS[ÃA]O DE TR[ÂA]NSITO DE VEGETAIS", text, re.I):
+        return []
+    recipient = _match(r"Nome do destinat[áa]rio\s*CPF/CNPJ\s*([^\n]+)", text)
+    section = _section(text, r"Nome do destinat[áa]rio", r"DECLARA")
+    document = _match(r"CPF/CNPJ\s*[^\n]+\n[^\d\n]*([\d./-]{11,18})", section)
+    # Não completar nem adivinhar dígitos que o OCR não conseguiu ler.
+    document = re.sub(r"\D", "", document)
+    if len(document) not in (11, 14):
+        document = ""
+    base = {
+        "Nº PTV": _match(r"N\s*\.\s*[oº°]?\s*:\s*(\d+)", text),
+        "Nome do destinatário": recipient,
+        "CPF/CNPJ do destinatário": document,
+        "Endereço de destino": _match(r"Endere[çc]o\s*([^\n]+)", section),
+        "Município de destino": _match(r"Munic[íi]pio\s*UF\s*([^\n]+)", section),
+        "UF de destino": _match(r"Munic[íi]pio\s*UF\s*[^\n]+\n([^\n]+)", section),
+        "Data de emissão": _match(r"Local e Data\s*(\d{2}/\d{2}/\d{4})", text),
+        "Validade": _match(r"Validade\s*(\d{2}/\d{2}/\d{4})", text),
+        "Nota fiscal": _match(r"N[úu]mero da Nota Fiscal:\s*(\d+)", text),
+    }
+    quantities = _section(text, r"TF n[ºo°]", r"Partida lacrada")
+    matches = re.findall(r"(?:^|\n)\d+\s*\n(\d+)\s*\n([\d.,]+)\s*\n([^\n]+)\n([^\n]+)\n(\d+)", quantities)
+    if not matches:
+        return [{**base, "Quantidade": "", "Documento de origem": "", "Número do documento": ""}]
+    return [{**base, "Unidade de produção": unit, "Quantidade": quantity,
+             "Medida": measure.strip(), "Documento de origem": origin.strip(),
+             "Número do documento": number}
+            for unit, quantity, measure, origin, number in matches]
