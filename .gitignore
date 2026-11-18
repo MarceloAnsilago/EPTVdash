@@ -7,5 +7,20 @@ __pycache__/
 *.py[cod]
 .streamlit/secrets.toml
 comandos.txt
+comando.txt
+# Arquivos temporários e resultados locais de PDF/OCR
+/tmp/
+/output/
+*.log
+# Caches de ferramentas Python
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Arquivos do sistema e do editor
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
 .pytest_cache/
 .vscode/
