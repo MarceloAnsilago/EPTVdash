@@ -19,6 +19,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from supabase_auth.errors import AuthError
 
 from ptv_parser import extract_ptv
+from pdf_reader import OCRUnavailableError, extract_document_text
 from supabase import create_client
 
 
@@ -330,9 +331,10 @@ else:
                 if document.needs_pass:
                     st.warning("Este PDF está protegido por senha.")
                 else:
-                    text = "\n\n".join(page.get_text() for page in document).strip()
+                    with st.spinner("Lendo o PDF e reconhecendo texto, se necessário..."):
+                        text = extract_document_text(document)
                     if not text:
-                        st.warning("Nenhum texto encontrado. PDFs digitalizados podem precisar de OCR.")
+                        st.warning("Nenhum texto foi reconhecido. Confira se o PDF está legível e tente uma cópia com melhor resolução.")
                     else:
                         rows = extract_ptv(text)
                         if rows:
@@ -357,6 +359,8 @@ else:
                             st.warning("Modelo de PTV não reconhecido. Confira o texto extraído abaixo.")
                         with st.expander("Ver texto extraído do PDF"):
                             st.text(text)
+        except OCRUnavailableError as exc:
+            st.error(str(exc))
         except (pymupdf.FileDataError, pymupdf.EmptyFileError, ValueError):
             st.error("Não foi possível ler este PDF. Verifique se o arquivo é válido.")
 
